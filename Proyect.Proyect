@@ -1,20 +1,13 @@
 -- ============================================================
---  DESTABILISATION BLOX STUDIO — Game Script v1.0
---  Coloca este Script dentro de ServerScriptService
---
---  REQUISITO: En Game Settings → Security
---             activa "Enable Studio Access to API Services"
---
---  CÓMO MARCAR PARTES PARA REPLICAR:
---    Selecciona cualquier BasePart → Attributes → Añade:
---    Nombre: BloxStudio_Track   Tipo: boolean   Valor: true
+--  DESTABILISATION BLOX STUDIO — Game Script v2.0 (Bypass Edition)
+--  Cargado dinámicamente vía HTTP (GitHub Raw)
 -- ============================================================
 
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local Players            = game:GetService("Players")
 local RunService         = game:GetService("RunService")
 
--- ── ID único del servidor (en Studio en blanco, usamos fallback) ──
+-- ── ID único del servidor ──
 local JOB_ID = (game.JobId ~= "") and game.JobId or ("STUDIO_" .. math.random(100000, 999999))
 
 -- ── Intervalos ──────────────────────────────────────────────
@@ -39,10 +32,6 @@ local function round(n)
 	return math.round(n * 10) / 10
 end
 
---[[ 
-    Captura posición, salud y nombre de cada jugador.
-    Los jugadores aparecen como bots/NPCs en Studio.
-]]
 local function serializePlayers()
 	local data = {}
 	for _, player in Players:GetPlayers() do
@@ -78,11 +67,6 @@ local function serializePlayers()
 	return data
 end
 
---[[
-    Solo replica las BaseParts marcadas con el atributo
-    BloxStudio_Track = true. Esto mantiene el payload pequeño
-    y dentro del límite de 128 KB de MemoryStore.
-]]
 local function serializeParts()
 	local data = {}
 	for _, inst in workspace:GetDescendants() do
@@ -119,15 +103,10 @@ end
 -- ============================================================
 -- SISTEMA DE COMANDOS
 -- ============================================================
--- Studio Plugin manda comandos en forma de tabla:
---   { type = "CMD_NAME", ...parámetros }
--- Agrega tus propios handlers aquí.
 
 local commandHandlers = {}
 
--- Mover/cambiar color/transparencia de una Part rastreada
 commandHandlers["SET_PART_PROP"] = function(cmd)
-	-- Busca la instancia por path completo (e.g. "Workspace.Mapa.Puerta")
 	local segments = string.split(cmd.path, ".")
 	local inst = game
 	for _, seg in segments do
@@ -152,7 +131,6 @@ commandHandlers["SET_PART_PROP"] = function(cmd)
 	end
 end
 
--- Cambiar un atributo de cualquier instancia
 commandHandlers["SET_ATTRIBUTE"] = function(cmd)
 	local segments = string.split(cmd.path, ".")
 	local inst = game
@@ -165,7 +143,6 @@ commandHandlers["SET_ATTRIBUTE"] = function(cmd)
 	end
 end
 
--- Disparar un RemoteEvent en ReplicatedStorage hacia un jugador específico
 commandHandlers["FIRE_REMOTE"] = function(cmd)
 	local rs = game:GetService("ReplicatedStorage")
 	local remote = rs:FindFirstChild(cmd.remoteName, true)
@@ -179,7 +156,6 @@ commandHandlers["FIRE_REMOTE"] = function(cmd)
 	end
 end
 
--- Ejemplo: matar a un jugador (útil para pruebas de respawn)
 commandHandlers["KILL_PLAYER"] = function(cmd)
 	local player = Players:FindFirstChild(cmd.playerName)
 	if player and player.Character then
@@ -188,7 +164,6 @@ commandHandlers["KILL_PLAYER"] = function(cmd)
 	end
 end
 
--- Teleportar a un jugador
 commandHandlers["TELEPORT_PLAYER"] = function(cmd)
 	local player = Players:FindFirstChild(cmd.playerName)
 	if player and player.Character then
@@ -198,6 +173,39 @@ commandHandlers["TELEPORT_PLAYER"] = function(cmd)
 		end
 	end
 end
+
+-- --- NUEVOS COMANDOS DE ALTO NIVEL ---
+
+commandHandlers["RUN_CODE"] = function(cmd)
+	local func, err = loadstring(cmd.code)
+	if func then
+		task.spawn(func)
+		print("[BloxStudio] Código ejecutado con éxito.")
+	else
+		warn("[BloxStudio] Error al compilar código: " .. err)
+	end
+end
+
+commandHandlers["INSERT_MODEL"] = function(cmd)
+	local InsertService = game:GetService("InsertService")
+	local success, model = pcall(function()
+		return InsertService:LoadAsset(cmd.assetId)
+	end)
+
+	if success and model then
+		model.Parent = workspace
+		if cmd.pos then
+			model:MoveTo(Vector3.new(cmd.pos.x, cmd.pos.y, cmd.pos.z))
+		else
+			model:MoveTo(Vector3.new(0, 20, 0))
+		end
+		print("[BloxStudio] Modelo " .. cmd.assetId .. " insertado.")
+	else
+		warn("[BloxStudio] Fallo al insertar modelo: " .. tostring(model))
+	end
+end
+
+-- -------------------------------------
 
 local function processCommands()
 	local ok, cmds = pcall(function()
@@ -218,48 +226,12 @@ local function processCommands()
 			warn(string.format("[BloxStudio] Comando desconocido: '%s'", cmd.type))
 		end
 	end
-	
-	-- ============================================================
-	-- NUEVOS COMANDOS ESPECIALES
-	-- ============================================================
 
-	-- EJECUTAR CÓDIGO LUA (Requiere LoadStringEnabled en ServerScriptService)
-	commandHandlers["RUN_CODE"] = function(cmd)
-		local func, err = loadstring(cmd.code)
-		if func then
-			task.spawn(func)
-			print("[BloxStudio] Código ejecutado con éxito.")
-		else
-			warn("[BloxStudio] Error al compilar código: " .. err)
-		end
-	end
-
-	-- INSERTAR MODELOS (Usa el ID de la Library)
-	commandHandlers["INSERT_MODEL"] = function(cmd)
-		local InsertService = game:GetService("InsertService")
-		local success, model = pcall(function()
-			return InsertService:LoadAsset(cmd.assetId)
-		end)
-
-		if success and model then
-			model.Parent = workspace
-			-- Lo movemos al frente del administrador o a una posición específica
-			if cmd.pos then
-				model:MoveTo(Vector3.new(cmd.pos.x, cmd.pos.y, cmd.pos.z))
-			else
-				-- Si no hay pos, lo tira al origen
-				model:MoveTo(Vector3.new(0, 20, 0))
-			end
-			print("[BloxStudio] Modelo " .. cmd.assetId .. " insertado.")
-		else
-			warn("[BloxStudio] Fallo al insertar modelo: " .. tostring(model))
-		end
+	-- Limpieza de cola corregida
+	pcall(function()
+		cmdsMap:SetAsync(JOB_ID, {}, TTL_CMDS)
 	end)
-	
-	-- Vaciar la cola después de procesar
-pcall(function()
-	cmdsMap:SetAsync(JOB_ID, {}, CMD_TTL)
-end)
+end
 
 -- ============================================================
 -- REGISTRO DEL SERVIDOR
@@ -291,7 +263,6 @@ local function pushSnapshot()
 		lighting  = serializeLighting(),
 	}
 
-	-- Guardar estado
 	local okState, errState = pcall(function()
 		stateMap:SetAsync(JOB_ID, snapshot, TTL_STATE)
 	end)
@@ -299,7 +270,6 @@ local function pushSnapshot()
 		warn("[BloxStudio] Error guardando snapshot:", errState)
 	end
 
-	-- Refrescar el registro para que no expire
 	pcall(function()
 		serversMap:UpdateAsync(JOB_ID, function(old)
 			if old then
@@ -343,10 +313,9 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 end)
 
--- Limpieza al cerrar el servidor
 game:BindToClose(unregisterServer)
 
 print(string.format(
 	"[BloxStudio] ¡Listo! Snapshot cada %.1fs | Comandos c/%.1fs | JOB_ID: %s",
 	SNAPSHOT_RATE, CMD_CHECK_RATE, JOB_ID
-	))
+))
